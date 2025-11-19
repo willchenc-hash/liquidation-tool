@@ -2,3 +2,5 @@ streamlit
 duckduckgo-search
 pandas
 beautifulsoup4
+openpyxl
+xlsxwriter
