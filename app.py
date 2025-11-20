@@ -9,7 +9,7 @@ import json
 import base64
 
 # --- 页面配置 ---
-st.set_page_config(page_title="尾货智能选品雷达 (AI Vision版)", page_icon="👁️", layout="wide")
+st.set_page_config(page_title="尾货智能选品雷达 (AI Vision Pro版)", page_icon="👁️", layout="wide")
 
 # --- 全局缓存 (避免重复计费) ---
 if 'ai_cache' not in st.session_state:
@@ -28,7 +28,7 @@ def get_ai_product_info_from_image(base64_image, api_key, text_input=None):
     """
     # 1. 检查 Key
     if not api_key:
-        return None, None, "❓ 未配置API Key", "N/A", 0, 0
+        return None, None, "❓ 未配置API Key", "N/A", 0, 0, 0, ""
 
     client = openai.OpenAI(api_key=api_key)
     
@@ -39,55 +39,52 @@ def get_ai_product_info_from_image(base64_image, api_key, text_input=None):
     if base64_image:
         messages_content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}", "detail": "low"} # "low" 模式更省钱
+            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}", "detail": "low"}
         })
 
-    # 主要文字提示，引导AI识别和模拟判断
+    # 主要文字提示
     main_text_prompt = f"""
-    You are a professional liquidation merchandise expert in the US market, specialized in product identification, market value estimation, and assessing substitutability for generic or unbranded items.
-
+    You are a professional liquidation merchandise expert in the US market.
     Analyze the product shown in the image (and potentially provided text input "{text_input}" if available).
 
     Tasks:
-    1.  **Identify Product:** Determine the product type, its brand, and model if possible.
-    2.  **Estimate Market Price:** Based on its appearance, identified brand/model (or similar generic products if the brand is unknown), estimate its typical retail price on Amazon or similar platforms. Assume it's new/open-box condition. If the brand is unknown, search for 'similar product [type] price amazon'.
-    3.  **Assess Substitutability (可替代性):** For products where the brand is unknown or generic, assess its substitutability in a low-price liquidation scenario (e.g., if it's a generic USB cable, it's highly substitutable; if it's a unique tool, less so).
-        - "High": (10 points) Generic, common, easily replaced by any other similar product (e.g., plain mug, basic USB cable, unbranded socks). High demand at low price.
-        - "Medium": (5 points) Some specific features, but can be replaced by other brands with similar features (e.g., basic blender, generic power bank, unbranded headphones).
-        - "Low": (0 points) Unique, specific brand features, or complex items where brand matters significantly (e.g., specific tool attachments, high-end electronics, branded clothing). Brand is key, hard to substitute.
-    4.  **Classify Brand Tier:** Based on US Resale Value/Liquidity for the detected/estimated brand (S, A, B, C).
-        - "S": Luxury, High-End Tech/Tool (40 points)
-        - "A": Well-known, Reliable (30 points)
-        - "B": Budget, Store Brands (15 points)
-        - "C": Generic, Unknown, Low Value (0 points)
-    5.  **Provide Reason:** A brief explanation in Chinese for the brand tier and price estimation.
+    1.  **Identify Product:** Determine the product type, its brand, and model.
+    2.  **Estimate Market Price:** Estimate its typical retail price on Amazon (New/Open-box). If brand is unknown, estimate based on generic equivalents.
+    3.  **Assess Substitutability (可替代性):**
+        - "High": (10 points) Generic/Common items.
+        - "Medium": (5 points) Some specific features.
+        - "Low": (0 points) Unique/Brand-heavy items.
+    4.  **Classify Brand Tier (US Resale Value):**
+        - "S": Luxury/High-End (40 pts)
+        - "A": Well-known (30 pts)
+        - "B": Budget (15 pts)
+        - "C": Generic/Unknown (0 pts)
+    5.  **Provide Reason:** Brief explanation in Chinese.
 
     Output strictly in JSON format:
-    ```json
     {{
-        "product_type": "Detected Product Type (e.g., Air Fryer, Bluetooth Speaker)",
-        "brand_name": "Detected or Estimated Brand (e.g., Ninja, Generic)",
-        "model_name": "Detected Model (if any)",
+        "product_type": "Detected Product Type",
+        "brand_name": "Detected Brand",
+        "model_name": "Detected Model",
         "estimated_market_price": 0.0,
         "substitutability": "High" or "Medium" or "Low",
         "brand_tier": "S" or "A" or "B" or "C",
-        "reason": "简要说明品牌评级和价格估算的理由。"
+        "reason": "Brief reason in Chinese"
     }}
-    ```
     """
     messages_content.append({"type": "text", "text": main_text_prompt})
 
-    # 缓存 Key (图片 + 文字)
+    # 缓存 Key
     cache_key = (base64_image[:50] if base64_image else "") + (text_input or "") 
     if cache_key in st.session_state.ai_cache:
         return st.session_state.ai_cache[cache_key]
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o", # 使用 gpt-4o 获得更好的视觉识别能力
+            model="gpt-4o", 
             messages=[{"role": "user", "content": messages_content}],
             response_format={"type": "json_object"},
-            temperature=0.0 # 保持结果稳定
+            temperature=0.0
         )
         
         data = json.loads(response.choices[0].message.content)
@@ -113,10 +110,9 @@ def get_ai_product_info_from_image(base64_image, api_key, text_input=None):
         return result
 
     except Exception as e:
-        st.error(f"AI Vision API 调用失败: {e}")
-        return None, None, "⚠️ AI调用失败", str(e), 0, 0, 0, "" # 统一返回 None, None 避免后续报错
+        return None, None, "⚠️ AI调用失败", str(e), 0, 0, 0, ""
 
-# --- 核心逻辑 2: 综合打分 (更新了品类分数计算) ---
+# --- 核心逻辑 2: 综合打分 (已修复 undefined variable 问题) ---
 def analyze_item_with_ai_vision(product_name_input, category_input, my_price, api_key, uploaded_image=None):
     base64_image = encode_image_to_base64(uploaded_image) if uploaded_image else None
     
@@ -126,7 +122,6 @@ def analyze_item_with_ai_vision(product_name_input, category_input, my_price, ap
         substitutability_ai, brand_score_ai, substitutability_score_ai, ai_reason = \
             get_ai_product_info_from_image(base64_image, api_key, text_input=product_name_input)
     else:
-        # 如果没有图片也没有文字输入，无法分析
         st.error("请提供产品名称或上传图片进行分析。")
         return None
 
@@ -137,16 +132,17 @@ def analyze_item_with_ai_vision(product_name_input, category_input, my_price, ap
             "AI识别品类": "N/A", "AI估算价格": 0, "可替代性": "N/A", "可替代性得分": 0
         }
 
-    # 采用 AI 识别出的信息
-    final_product_name = f"{brand_name_ai} {model_name_ai}" if brand_name_ai != "Unknown" else product_type
+    # --- 修复点：定义 price_note ---
     market_price = estimated_market_price_ai
+    if market_price > 0:
+        price_note = "🤖 AI估算"
+    else:
+        price_note = "⚠️ 无法估价"
+    # ----------------------------
     
-    # 品类分 (由 AI 评估出的可替代性来修正)
-    # 通用品类基础分
+    # 品类分
     cat_base_score_map = {"电子/家电 (通用)": 20, "知名工具": 15, "特定家电": 10, "家居/户外": 5, "冷门/配件": -10}
     cat_score = cat_base_score_map.get(category_input, 0)
-    # 可替代性得分修正：高替代性 +分，低替代性 -分 (这里简单加，如果觉得重复可以调整权重)
-    # cat_score += substitutability_score_ai # 暂时不加，避免重复计分，让可替代性单独作为影响因素
 
     # 价格优势分
     discount_rate = 0
@@ -157,16 +153,12 @@ def analyze_item_with_ai_vision(product_name_input, category_input, my_price, ap
         elif discount_rate >= 50: price_score = 30
         elif discount_rate >= 30: price_score = 10
     
-    # 价值感知分 (修正: 高客单价更容易吸引眼球)
+    # 价值感知分
     value_score = 10 if market_price > 200 else (5 if market_price > 100 else 0)
 
-    # 总分 = 品牌分 + 品类分 + 价格分 + 价值感分 + 可替代性得分
-    # 这里的 total_score 体系里，品牌分40，品类分20，价格分40，价值感分10，可替代性10
-    # 所以总分可能超过100，需要归一化或者调整权重。
-    # 为了简化，直接在原有的基础上，把“可替代性”也算作一个额外加分项（如果是高替代性且低价，反而容易走量）
-    
+    # 总分
     total_score = brand_score_ai + cat_score + price_score + value_score + substitutability_score_ai
-    total_score = min(100, max(0, total_score)) # 确保在0-100之间
+    total_score = min(100, max(0, total_score))
 
     # 评级建议
     if total_score >= 80: suggestion = "S级-引流钩子 (必做广告)"
@@ -181,7 +173,7 @@ def analyze_item_with_ai_vision(product_name_input, category_input, my_price, ap
         "AI点评": ai_reason,
         "全网参考价": market_price,
         "预估折扣": f"{int(discount_rate)}% OFF",
-        "价格备注": price_note,
+        "价格备注": price_note, # 之前报错的地方现在已修复
         "链接": "AI估算" if market_price == estimated_market_price_ai else "N/A",
         "AI识别品类": product_type,
         "AI估算价格": estimated_market_price_ai,
@@ -196,10 +188,10 @@ st.markdown("支持 **AI识图**、**单品交互** 与 **Excel批量处理** �
 # --- 侧边栏配置 ---
 with st.sidebar:
     st.header("🔑 配置中心")
-    api_key = st.text_input("请输入 OpenAI API Key", type="password", help="使用 gpt-4o 模型，费用较低，但比 gpt-4o-mini 略高。")
+    api_key = st.text_input("请输入 OpenAI API Key", type="password", help="使用 gpt-4o 模型进行视觉识别。")
     st.markdown("[👉 如何获取 Key?](https://platform.openai.com/api-keys)")
     st.divider()
-    st.info("💡 本工具使用 GPT-4o Vision 模型进行图片识别和智能估价。")
+    st.info("💡 本工具使用 GPT-4o Vision 模型。")
 
 if not api_key:
     st.warning("⚠️ 请先在左侧边栏输入 OpenAI API Key 才能启用 AI 识别功能。")
@@ -243,7 +235,6 @@ with tab1:
                         st.caption(f"AI点评: {res['AI点评']}")
                         st.write(f"**💰 AI估算市场价:** ${res['AI估算价格']} ({res['预估折扣']})")
                         st.write(f"**🔄 可替代性:** {res['可替代性']} ({res['可替代性得分']}分)")
-                        if res['链接'] and res['链接'] != "N/A": st.markdown(f"[🔗 估价来源]({res['链接']})")
                 else:
                     st.error("分析失败，请检查输入和 API Key。")
 
@@ -274,7 +265,6 @@ with tab2:
             bar = st.progress(0)
             status = st.empty()
             
-            # 检查关键列
             required_cols = ["产品全名", "产品品类", "拟售价"]
             if not all(col in df.columns for col in required_cols):
                 st.error(f"❌ 批量文件列名不匹配！请确保包含: {required_cols}")
@@ -284,17 +274,16 @@ with tab2:
                 status.text(f"正在 AI 分析第 {i+1}/{len(df)} 个: {row['产品全名']}...")
                 bar.progress((i + 1) / len(df))
                 
-                # 批量模式只用文字输入给AI
                 res = analyze_item_with_ai_vision(
                     row['产品全名'], 
                     row.get('产品品类', '电子/家电 (通用)'), 
                     float(row['拟售价']), 
                     api_key,
-                    uploaded_image=None # 批量模式不传图片
+                    uploaded_image=None 
                 )
                 
                 combined = row.to_dict()
-                if res: # 确保分析成功
+                if res:
                     combined.update({
                         "总分": res['总分'],
                         "评级建议": res['评级建议'],
@@ -304,26 +293,21 @@ with tab2:
                         "AI估算市场价": res['AI估算价格'],
                         "可替代性": res['可替代性'],
                         "可替代性得分": res['可替代性得分'],
-                        "你的拟售价": float(row['拟售价']), # 方便对比
                         "预估折扣": res['预估折扣'],
                         "价格备注": res['价格备注']
                     })
-                else: # 失败时填充默认值
+                else:
                     combined.update({
-                        "总分": 0, "评级建议": "失败", "AI品牌评级": "N/A", "AI点评": "API调用失败",
-                        "AI识别品类": "N/A", "AI估算市场价": 0, "可替代性": "N/A", "可替代性得分": 0,
-                        "你的拟售价": float(row['拟售价']),
-                        "预估折扣": "0% OFF", "价格备注": "失败"
+                        "总分": 0, "评级建议": "失败"
                     })
                 
                 results.append(combined)
-                time.sleep(1.0) # 避免触发 API 速率限制
+                time.sleep(1.0) 
 
             st.success("✅ 批量 AI 分析完成！")
             final_df = pd.DataFrame(results)
             st.dataframe(final_df)
             
-            # 导出
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
                 final_df.to_excel(writer, index=False)
