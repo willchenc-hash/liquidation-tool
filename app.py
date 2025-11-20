@@ -1,36 +1,69 @@
 import streamlit as st
 import pandas as pd
+import requests
 import re
 import time
 import io
 import openai
 import json
 import base64
-import requests
 
 # --- 页面配置 ---
-st.set_page_config(page_title="尾货智能选品雷达 (全品类版)", page_icon="📊", layout="wide")
+st.set_page_config(page_title="尾货智能选品雷达 (终极修正版)", page_icon="🚀", layout="wide")
+
+# --- 全局配置与映射字典 ---
+
+# 1. 品类打分权重 (Scoring Weights)
+CAT_SCORE_MAP = {
+    "电子/家电 (通用)": 20, 
+    "知名工具": 15, 
+    "特定家电": 10,
+    "时尚/服装/奢侈品": 10,          # ✅ 新增：适中的基础分
+    "虚拟/数字产品 (激活码/卡)": 5,  # ✅ 新增：低基础分(高风险)
+    "家居/户外": 5, 
+    "冷门/配件": -10
+}
+
+# 2. 搜索关键词锚点 (Search Anchors) - 核心修复
+# 作用：当用户选了“时尚”但输入模糊时，强制追加英文限定词，防止搜偏
+CAT_SEARCH_TERM_MAP = {
+    "电子/家电 (通用)": "Electronics",
+    "知名工具": "Power Tools",
+    "特定家电": "Appliances",
+    "时尚/服装/奢侈品": "Fashion Shoes Clothing Handbags", # ✅ 强制锁定鞋服箱包
+    "虚拟/数字产品 (激活码/卡)": "Digital Code Online Game Code",
+    "家居/户外": "Home Garden Outdoor",
+    "冷门/配件": "Replacement Parts"
+}
 
 # --- 全局缓存 ---
 if 'ai_cache' not in st.session_state:
     st.session_state.ai_cache = {}
 
-# --- 辅助函数：图片编码 ---
+# --- 辅助函数 ---
 def encode_image_to_base64(uploaded_file):
     if uploaded_file is not None:
         return base64.b64encode(uploaded_file.read()).decode("utf-8")
     return None
 
 # --- 核心逻辑 1: 亚马逊数据获取 (RapidAPI) ---
-def search_market_price_rapidapi(product_query, rapidapi_key):
+def search_market_price_rapidapi(product_query, rapidapi_key, category=None):
     """
-    调用 RapidAPI 获取：价格、月销量、链接
+    调用 RapidAPI 获取：价格、月销量、链接。
+    关键升级：根据 category 追加限定词，解决 'shoes' 搜出 'glasses' 的问题。
     """
     if not rapidapi_key:
         return 0, None, "⚠️ 未配置RapidAPI", "N/A"
 
+    # --- 核心修复逻辑 ---
+    # 获取该品类对应的英文限定词
+    append_term = CAT_SEARCH_TERM_MAP.get(category, "")
+    # 组合最终搜索词 (例如: "Gucci women shose Fashion Shoes Clothing Handbags")
+    # 这样即使 "shose" 拼错了，Amazon 也能通过后面的限定词知道你要搜鞋服类
+    final_query = f"{product_query} {append_term}".strip()
+
     url = "https://real-time-amazon-data.p.rapidapi.com/search"
-    querystring = {"query": product_query, "page": "1", "country": "US", "sort_by": "RELEVANCE"}
+    querystring = {"query": final_query, "page": "1", "country": "US", "sort_by": "RELEVANCE"}
     
     headers = {
         "X-RapidAPI-Key": rapidapi_key,
@@ -132,10 +165,11 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
     if not ai_data:
         return None
 
-    # 2. 获取市场数据
+    # 2. 获取市场数据 (传入 category 以锁定搜索范围)
     api_price, api_link, price_source, api_sales = search_market_price_rapidapi(
         f"{ai_data['brand_name']} {ai_data['model_name'] or ai_data['product_type']}", 
-        rapidapi_key
+        rapidapi_key,
+        category # <--- 关键传参
     )
 
     final_price = api_price if api_price > 0 else ai_data['estimated_price']
@@ -143,7 +177,7 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
     link = api_link if api_link else "N/A"
 
     # ---------------------------------------------------
-    # 🎯 评分规则引擎 (已更新虚拟产品逻辑)
+    # 🎯 评分规则引擎
     # ---------------------------------------------------
     score_breakdown = {}
     
@@ -156,17 +190,8 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
         "desc": f"等级: {ai_data['brand_tier']}级 ({ai_data['brand_name']})"
     }
 
-    # B. 品类热度分 (20分) - 【此处已新增】
-    cat_map = {
-        "电子/家电 (通用)": 20, 
-        "知名工具": 15, 
-        "特定家电": 10, 
-        "时尚/服装/奢侈品": 10,
-        "虚拟/数字产品 (激活码/卡)": 5, # <--- 新增逻辑
-        "家居/户外": 5, 
-        "冷门/配件": -10
-    }
-    cat_score = cat_map.get(category, 0)
+    # B. 品类热度分 (20分)
+    cat_score = CAT_SCORE_MAP.get(category, 0)
     score_breakdown['品类分'] = {
         "score": cat_score, 
         "max": 20, 
@@ -225,7 +250,7 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
     }
 
 # --- UI 界面 ---
-st.title("📊 尾货智能选品雷达 (全品类版)")
+st.title("📊 尾货智能选品雷达 (终极修正版)")
 
 with st.sidebar:
     st.header("🔑 配置中心")
@@ -245,20 +270,13 @@ with tab1:
     c1, c2 = st.columns([1, 1.5])
     with c1:
         img = st.file_uploader("上传图片", type=["jpg","png"])
-        txt = st.text_input("产品名称", placeholder="例如: Windows 10 Pro Key")
+        txt = st.text_input("产品名称", placeholder="例如: Gucci Women Shoes")
         
-        # --- UI 更新：新增选项 ---
-        cat = st.selectbox("品类", [
-            "电子/家电 (通用)", 
-            "知名工具", 
-            "特定家电", 
-            "虚拟/数字产品 (激活码/卡)",
-            "时尚/服装/奢侈品",
-            "家居/户外", 
-            "冷门/配件"
-        ])
+        # 动态读取配置中的品类
+        cat_options = list(CAT_SCORE_MAP.keys())
+        cat = st.selectbox("品类", cat_options)
         
-        price = st.number_input("拿货价 ($)", value=9.90)
+        price = st.number_input("拿货价 ($)", value=50.0)
         btn = st.button("🚀 深度分析")
 
     if btn:
@@ -312,12 +330,12 @@ with tab1:
 
 # --- 批量模式 ---
 with tab2:
-    st.info("批量模式已支持【虚拟/数字产品】。")
+    st.info("批量模式已全面兼容新增品类。")
     
     df_template = pd.DataFrame({
-        "产品全名": ["Ninja AF101", "Windows 10 Home Key"], 
-        "产品品类": ["特定家电", "虚拟/数字产品 (激活码/卡)"], 
-        "拟售价": [40, 9.9]
+        "产品全名": ["Ninja AF101", "Windows 10 Key", "Gucci Ace Sneakers"], 
+        "产品品类": ["特定家电", "虚拟/数字产品 (激活码/卡)", "时尚/服装/奢侈品"], 
+        "拟售价": [40, 9.9, 300]
     })
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
