@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from duckduckgo_search import DDGS
 import re
 import time
 import io
@@ -10,7 +9,7 @@ import base64
 import requests
 
 # --- 页面配置 ---
-st.set_page_config(page_title="尾货智能选品雷达 (销量+评分透视版)", page_icon="📊", layout="wide")
+st.set_page_config(page_title="尾货智能选品雷达 (全品类版)", page_icon="📊", layout="wide")
 
 # --- 全局缓存 ---
 if 'ai_cache' not in st.session_state:
@@ -53,7 +52,7 @@ def search_market_price_rapidapi(product_query, rapidapi_key):
                     clean_price = float(str(price).replace('$', '').replace(',', ''))
                 except: pass
             
-            # 2. 提取月销量 (Amazon通常显示 "2K+ bought in past month")
+            # 2. 提取月销量
             sales_volume = top_product.get("sales_volume", "暂无数据")
             
             # 3. 链接
@@ -68,13 +67,6 @@ def search_market_price_rapidapi(product_query, rapidapi_key):
 
 # --- 核心逻辑 2: AI Vision 识别 & 估算 ---
 def get_ai_product_info(base64_image, api_key, text_input=None):
-    """
-    AI 任务：
-    1. 识别产品
-    2. 估算价格 (如果API失败)
-    3. 估算销量 (如果API失败)
-    4. 判断品牌等级
-    """
     if not api_key:
         return None 
 
@@ -130,7 +122,7 @@ def get_ai_product_info(base64_image, api_key, text_input=None):
         st.error(f"AI Error: {e}")
         return None
 
-# --- 核心逻辑 3: 综合分析与打分 (含规则输出) ---
+# --- 核心逻辑 3: 综合分析与打分 ---
 def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi_key, image=None):
     
     base64_img = encode_image_to_base64(image)
@@ -140,7 +132,7 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
     if not ai_data:
         return None
 
-    # 2. 获取市场数据 (优先 API，AI 兜底)
+    # 2. 获取市场数据
     api_price, api_link, price_source, api_sales = search_market_price_rapidapi(
         f"{ai_data['brand_name']} {ai_data['model_name'] or ai_data['product_type']}", 
         rapidapi_key
@@ -151,7 +143,7 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
     link = api_link if api_link else "N/A"
 
     # ---------------------------------------------------
-    # 🎯 评分规则引擎 (Scoring Rules Engine)
+    # 🎯 评分规则引擎 (已更新虚拟产品逻辑)
     # ---------------------------------------------------
     score_breakdown = {}
     
@@ -164,8 +156,15 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
         "desc": f"等级: {ai_data['brand_tier']}级 ({ai_data['brand_name']})"
     }
 
-    # B. 品类热度分 (20分)
-    cat_map = {"电子/家电 (通用)": 20, "知名工具": 15, "特定家电": 10, "家居/户外": 5, "冷门/配件": -10}
+    # B. 品类热度分 (20分) - 【此处已新增】
+    cat_map = {
+        "电子/家电 (通用)": 20, 
+        "知名工具": 15, 
+        "特定家电": 10, 
+        "虚拟/数字产品 (激活码/卡)": 5, # <--- 新增逻辑
+        "家居/户外": 5, 
+        "冷门/配件": -10
+    }
     cat_score = cat_map.get(category, 0)
     score_breakdown['品类分'] = {
         "score": cat_score, 
@@ -225,7 +224,7 @@ def analyze_item_complete(product_name, category, my_price, openai_key, rapidapi
     }
 
 # --- UI 界面 ---
-st.title("📊 尾货智能选品雷达 (Sales & Scoring Edition)")
+st.title("📊 尾货智能选品雷达 (全品类版)")
 
 with st.sidebar:
     st.header("🔑 配置中心")
@@ -238,16 +237,26 @@ if not openai_key:
     st.warning("请先输入 OpenAI API Key")
     st.stop()
 
-tab1, tab2 = st.tabs(["🔍 单品透视 (含销量)", "📄 批量报表"])
+tab1, tab2 = st.tabs(["🔍 单品透视", "📄 批量报表"])
 
 # --- 单品模式 ---
 with tab1:
     c1, c2 = st.columns([1, 1.5])
     with c1:
         img = st.file_uploader("上传图片", type=["jpg","png"])
-        txt = st.text_input("产品名称", placeholder="例如: Ninja AF101")
-        cat = st.selectbox("品类", ["电子/家电 (通用)", "知名工具", "特定家电", "家居/户外", "冷门/配件"])
-        price = st.number_input("拿货价 ($)", value=50.0)
+        txt = st.text_input("产品名称", placeholder="例如: Windows 10 Pro Key")
+        
+        # --- UI 更新：新增选项 ---
+        cat = st.selectbox("品类", [
+            "电子/家电 (通用)", 
+            "知名工具", 
+            "特定家电", 
+            "虚拟/数字产品 (激活码/卡)", # <--- 新增选项
+            "家居/户外", 
+            "冷门/配件"
+        ])
+        
+        price = st.number_input("拿货价 ($)", value=9.90)
         btn = st.button("🚀 深度分析")
 
     if btn:
@@ -258,8 +267,8 @@ with tab1:
             with c2:
                 # 1. 头部大分
                 score_color = "#ff4b4b"
-                if res['总分'] >= 80: score_color = "#09ab3b" # Green
-                elif res['总分'] >= 60: score_color = "#ffbd45" # Orange
+                if res['总分'] >= 80: score_color = "#09ab3b"
+                elif res['总分'] >= 60: score_color = "#ffbd45"
 
                 st.markdown(f"""
                 <div style="padding:20px; border-radius:10px; background-color:#f0f2f6; text-align:center; border: 2px solid {score_color}">
@@ -269,7 +278,7 @@ with tab1:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # 2. 销量与价格卡片
+                # 2. 市场数据
                 st.markdown("### 📈 市场表现 (过去一个月)")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("月销量", res['市场数据']['月销量'])
@@ -279,25 +288,20 @@ with tab1:
                 if res['市场数据']['链接'] != "N/A":
                     st.markdown(f"[🔗 点击跳转 Amazon 查看详情]({res['市场数据']['链接']})")
 
-                # 3. 评分规则表述 (用户需求核心)
+                # 3. 评分细则
                 st.markdown("### 💯 评分规则细则")
                 rules = res['评分细则']
                 
-                # 品牌
                 b = rules['品牌分']
                 st.progress(b['score']/40, text=f"品牌力: {b['score']}/40 分 — {b['desc']}")
                 
-                # 价格
                 p = rules['价格优势']
                 st.progress(p['score']/40, text=f"价格优势: {p['score']}/40 分 — {p['desc']}")
                 
-                # 品类
                 c = rules['品类分']
-                # 品类分可能为负，处理一下显示
                 c_val = max(0, c['score'])
                 st.progress(c_val/20, text=f"品类热度: {c['score']}/20 分 — {c['desc']}")
                 
-                # 价值
                 v = rules['高价值加权']
                 st.progress(v['score']/10, text=f"高价值加权: {v['score']}/10 分 — {v['desc']}")
 
@@ -306,10 +310,13 @@ with tab1:
 
 # --- 批量模式 ---
 with tab2:
-    st.info("批量模式将自动抓取每一行的销量数据。")
+    st.info("批量模式已支持【虚拟/数字产品】。")
     
-    # 模板生成
-    df_template = pd.DataFrame({"产品全名": ["Ninja AF101", "Dyson V10"], "产品品类": ["特定家电", "电子/家电 (通用)"], "拟售价": [40, 150]})
+    df_template = pd.DataFrame({
+        "产品全名": ["Ninja AF101", "Windows 10 Home Key"], 
+        "产品品类": ["特定家电", "虚拟/数字产品 (激活码/卡)"], 
+        "拟售价": [40, 9.9]
+    })
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df_template.to_excel(writer, index=False)
@@ -324,7 +331,6 @@ with tab2:
         
         for i, row in df.iterrows():
             bar.progress((i+1)/len(df))
-            # 批量处理
             r = analyze_item_complete(
                 row['产品全名'], 
                 row.get('产品品类', '电子/家电 (通用)'), 
@@ -340,13 +346,13 @@ with tab2:
                     "评级": r['评级建议'],
                     "品牌": r['商品信息']['全名'],
                     "市场价": r['市场数据']['参考价'],
-                    "月销量": r['市场数据']['月销量'], # 核心新增
+                    "月销量": r['市场数据']['月销量'],
                     "折扣": r['市场数据']['预估折扣'],
                     "品牌分": r['评分细则']['品牌分']['score'],
                     "价格分": r['评分细则']['价格优势']['score']
                 })
                 results.append(flat_res)
-            time.sleep(1) # 避免 API 速率限制
+            time.sleep(1)
 
         final_df = pd.DataFrame(results)
         st.dataframe(final_df)
